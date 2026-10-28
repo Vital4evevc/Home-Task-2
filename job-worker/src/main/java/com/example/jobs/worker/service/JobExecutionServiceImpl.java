@@ -22,7 +22,6 @@ import com.example.jobs.worker.config.JobProperties;
 import com.example.jobs.common.dao.Job;
 import com.example.jobs.common.enums.JobStatus;
 import com.example.jobs.worker.exceptions.SimulatedWorkException;
-import com.example.jobs.worker.observability.JobMetrics;
 import com.example.jobs.common.repository.IJobRepository;
 
 /**
@@ -51,18 +50,16 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
     private final IJobRepository repository;
     private final IJobScheduler scheduler;
     private final JobProperties properties;
-    private final JobMetrics metrics;
     private final Clock clock;
     private final TransactionTemplate tx;
     /** Lets a worker tell a shutdown interrupt apart from a cancellation interrupt. */
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     public JobExecutionServiceImpl(IJobRepository repository, IJobScheduler scheduler, JobProperties properties,
-                                   JobMetrics metrics, Clock clock, PlatformTransactionManager transactionManager) {
+                                   Clock clock, PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.scheduler = scheduler;
         this.properties = properties;
-        this.metrics = metrics;
         this.clock = clock;
         this.tx = new TransactionTemplate(transactionManager);
     }
@@ -76,8 +73,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
             return;
         }
         Attempt attempt = claimed.get();
-        metrics.running().incrementAndGet();
-        long startNanos = System.nanoTime();
         try {
             performWork(attempt);
             succeed(attempt);
@@ -86,9 +81,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
             interrupted(attempt, shuttingDown.get());
         } catch (Exception e) {
             fail(attempt, e);
-        } finally {
-            metrics.running().decrementAndGet();
-            metrics.recordExecution(System.nanoTime() - startNanos);
         }
     }
 
@@ -112,7 +104,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
                 if (job.isCancelRequested() && !job.getStatus().isTerminal()) {
                     // e.g. the node died after cancel was requested but before it could interrupt
                     repository.markCancelled(jobId, JobStatus.ACTIVE, now);
-                    metrics.finished(JobStatus.CANCELLED);
                     log.info("Job {} was cancel-requested; marked CANCELLED instead of running", jobId);
                 } else {
                     log.info("Job {} not claimable (status={}), skipping fire", jobId, job.getStatus());
@@ -121,13 +112,11 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
             }
 
             if (recovering) {
-                metrics.recovered();
                 log.warn("Recovering job {} after node failure; this is attempt {}/{}",
                         jobId, job.getAttempts(), job.getMaxAttempts());
                 if (job.getAttempts() > job.getMaxAttempts()) {
                     repository.markFailed(jobId, EnumSet.of(JobStatus.RUNNING),
                             "Interrupted by node failure and no attempts left", now);
-                    metrics.finished(JobStatus.FAILED);
                     return Optional.empty();
                 }
             }
@@ -144,7 +133,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
             Instant now = clock.instant();
             String result = "Completed after " + attempt.duration().toMillis() + " ms";
             if (repository.markSucceeded(attempt.jobId(), scheduler.instanceId(), result, now) == 1) {
-                metrics.finished(JobStatus.SUCCEEDED);
                 log.info("Job {} succeeded", attempt.jobId());
                 return;
             }
@@ -168,7 +156,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
                 Instant next = now.plus(backoff);
                 if (repository.markRetryPending(jobId, scheduler.instanceId(), message, next, now) == 1) {
                     scheduler.scheduleAttempt(jobId, next);   // same transaction as the state change
-                    metrics.retried();
                     log.warn("Job {} attempt {} failed ({}); retrying in {} ms",
                             jobId, attempt.number(), message, backoff.toMillis());
                 } else {
@@ -176,7 +163,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
                 }
             } else {
                 repository.markFailed(jobId, EnumSet.of(JobStatus.RUNNING), message, now);
-                metrics.finished(JobStatus.FAILED);
                 log.error("Job {} failed permanently after {} attempts: {}", jobId, attempt.number(), message);
             }
         });
@@ -268,7 +254,6 @@ public class JobExecutionServiceImpl implements IJobExecutionService {
         Job job = repository.findById(jobId).orElseThrow();
         if (job.isCancelRequested()
                 && repository.markCancelled(jobId, EnumSet.of(JobStatus.RUNNING), now) == 1) {
-            metrics.finished(JobStatus.CANCELLED);
             log.info("Job {} cancelled while running", jobId);
             return true;
         }

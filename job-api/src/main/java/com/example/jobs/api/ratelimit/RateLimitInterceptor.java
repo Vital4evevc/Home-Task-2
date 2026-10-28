@@ -10,18 +10,15 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import com.example.jobs.api.observability.JobMetrics;
 
 /** Applies the per-user submission limit to POST /api/jobs and POST /api/schedules (runs after authentication). */
 @Component
 public class RateLimitInterceptor implements HandlerInterceptor {
 
     private final SubmissionRateLimiter limiter;
-    private final JobMetrics metrics;
 
-    public RateLimitInterceptor(SubmissionRateLimiter limiter, JobMetrics metrics) {
+    public RateLimitInterceptor(SubmissionRateLimiter limiter) {
         this.limiter = limiter;
-        this.metrics = metrics;
     }
 
     @Override
@@ -39,7 +36,6 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         if (retryAfter == 0) {
             return true;
         }
-        metrics.rateLimited();
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("Retry-After", Long.toString(retryAfter));
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);

@@ -22,8 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface IJobRepository extends JpaRepository<Job, String> {
 
-    long countByStatus(JobStatus status);
-
     Page<Job> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     /** Runs of a cron schedule, newest first. */

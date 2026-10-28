@@ -8,7 +8,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -22,7 +21,6 @@ import org.testcontainers.containers.MySQLContainer;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@AutoConfigureObservability // enables the Prometheus registry in tests
 @ActiveProfiles("test")
 public abstract class AbstractIntegrationTest {
 

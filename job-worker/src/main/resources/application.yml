@@ -1,4 +1,4 @@
-# job-worker: executes jobs only. No REST API; the HTTP port serves actuator health/metrics.
+# job-worker: executes jobs only. No REST API; the HTTP port serves actuator health checks.
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
@@ -62,14 +62,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info
   endpoint:
     health:
       probes:
         enabled: true
-  metrics:
-    tags:
-      application: job-worker
 
 logging:
   pattern:

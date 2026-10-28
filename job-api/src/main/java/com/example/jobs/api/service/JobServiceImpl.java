@@ -25,7 +25,6 @@ import com.example.jobs.api.exceptions.InvalidJobStateException;
 import com.example.jobs.api.exceptions.InvalidScheduledAtException;
 import com.example.jobs.api.exceptions.JobNotFoundException;
 import com.example.jobs.api.scheduling.IJobScheduler;
-import com.example.jobs.api.observability.JobMetrics;
 
 /**
  * Default {@link IJobService}: the job row and its Quartz trigger are written in one transaction.
@@ -38,18 +37,16 @@ public class JobServiceImpl implements IJobService {
     private final IJobRepository repository;
     private final IJobScheduler scheduler;
     private final JobProperties properties;
-    private final JobMetrics metrics;
     private final Clock clock;
     private final TransactionTemplate tx;
     /** Zone in which local {@code scheduledAt} values are interpreted. */
     private final ZoneId zone;
 
     public JobServiceImpl(IJobRepository repository, IJobScheduler scheduler, JobProperties properties,
-            JobMetrics metrics, Clock clock, PlatformTransactionManager transactionManager) {
+            Clock clock, PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.scheduler = scheduler;
         this.properties = properties;
-        this.metrics = metrics;
         this.clock = clock;
         this.tx = new TransactionTemplate(transactionManager);
         this.zone = ZoneId.of(properties.timeZone());   // fails fast at startup on an invalid zone
@@ -83,7 +80,6 @@ public class JobServiceImpl implements IJobService {
                             runAt, now);
                     repository.saveAndFlush(job); // primary key uniqueness is checked here
                     scheduler.scheduleAttempt(job.getId(), runAt);
-                    metrics.submitted();
                     log.info("Job {} submitted, scheduled for {}", job.getId(), runAt);
                     return job;
                 });
@@ -143,7 +139,6 @@ public class JobServiceImpl implements IJobService {
             if (JobStatus.PENDING.contains(job.getStatus())
                     && repository.markCancelled(id, JobStatus.PENDING, now) == 1) {
                 scheduler.unschedule(id);
-                metrics.cancelledBeforeStart();
                 log.info("Job {} cancelled before running", id);
                 return repository.findById(id).orElseThrow();
             }

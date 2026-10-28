@@ -25,7 +25,6 @@ import com.example.jobs.api.exceptions.IdempotencyConflictException;
 import com.example.jobs.api.exceptions.InvalidJobCronException;
 import com.example.jobs.api.exceptions.InvalidJobCronStateException;
 import com.example.jobs.api.exceptions.JobCronNotFoundException;
-import com.example.jobs.api.observability.JobMetrics;
 import com.example.jobs.api.scheduling.IJobScheduler;
 import com.example.jobs.common.dao.Job;
 import com.example.jobs.common.dao.JobCron;
@@ -53,20 +52,18 @@ public class JobCronServiceImpl implements IJobCronService {
     private final IJobRepository jobs;
     private final IJobScheduler scheduler;
     private final JobProperties properties;
-    private final JobMetrics metrics;
     private final Clock clock;
     private final TransactionTemplate tx;
     /** Zone in which cron expressions are evaluated ({@code jobs.time-zone}). */
     private final ZoneId zone;
 
     public JobCronServiceImpl(IJobCronRepository schedules, IJobRepository jobs, IJobScheduler scheduler,
-            JobProperties properties, JobMetrics metrics, Clock clock,
+            JobProperties properties, Clock clock,
             PlatformTransactionManager transactionManager) {
         this.schedules = schedules;
         this.jobs = jobs;
         this.scheduler = scheduler;
         this.properties = properties;
-        this.metrics = metrics;
         this.clock = clock;
         this.tx = new TransactionTemplate(transactionManager);
         this.zone = ZoneId.of(properties.timeZone());
@@ -87,7 +84,6 @@ public class JobCronServiceImpl implements IJobCronService {
                         command.allowConcurrentRuns(), properties.retry().maxAttempts(), clock.instant());
                 schedules.saveAndFlush(cron); // primary key uniqueness is checked here
                 scheduler.scheduleCron(cron.getId(), cron.getCronExpression(), zone.getId());
-                metrics.scheduleCreated();
                 log.info("Schedule {} created: '{}' ({})", cron.getId(), cron.getCronExpression(),
                         zone.getId());
                 return view(cron);
@@ -119,7 +115,6 @@ public class JobCronServiceImpl implements IJobCronService {
                 throw new InvalidJobCronStateException("Schedule " + id + " is already cancelled");
             }
             scheduler.unscheduleCron(id); // same transaction: no firing after this commits
-            metrics.scheduleCancelled();
             log.info("Schedule {} cancelled", id);
             return view(load(id));
         });

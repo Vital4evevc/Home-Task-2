@@ -18,7 +18,7 @@ import com.example.jobs.api.config.JobProperties;
 
 /**
  * Authentication: HTTP Basic against configured users (stateless, no session, no CSRF needed).
- * Authorization: role USER for the API, ADMIN for operational endpoints (metrics).
+ * Authorization: role USER for the API, ADMIN for the other actuator endpoints (health is public).
  *
  * <p>Production: swap {@code httpBasic} for {@code oauth2ResourceServer().jwt()} against an OIDC
  * provider; roles come from token claims. Nothing else changes.

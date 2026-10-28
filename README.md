@@ -23,7 +23,7 @@ docker compose up --build          # MySQL + job-api + 2 job-worker
 | URL | What |
 |---|---|
 | `http://localhost:8080` | `job-api` (REST API) |
-| `http://localhost:9091`, `:9092` | `job-worker` 1 / 2: actuator only (`/actuator/health`, `/actuator/prometheus`) |
+| `http://localhost:9091`, `:9092` | `job-worker` 1 / 2: health checks only (`/actuator/health`) |
 | `localhost:3307` | MySQL (`jobs` / `jobs`) |
 
 Demo users (HTTP Basic): `alice / alice-pass`, `bob / bob-pass`, `admin / admin-pass` (ADMIN).
@@ -77,9 +77,8 @@ curl -u alice:alice-pass -X POST http://localhost:8080/api/jobs/<id>/cancel
 # Then some attempts fail, are retried with backoff (attempts > 1), and a few jobs end FAILED.
 
 # Operational endpoints
-curl http://localhost:8080/actuator/health
-curl -u admin:admin-pass http://localhost:8080/actuator/prometheus | grep jobs_   # API metrics
-curl http://localhost:9091/actuator/prometheus | grep jobs_                        # worker metrics
+curl http://localhost:8080/actuator/health      # API
+curl http://localhost:9091/actuator/health      # worker 1
 ```
 
 **Failover demo:** submit a few jobs, run `docker compose kill worker1`, and watch the jobs that worker1 was
@@ -109,7 +108,7 @@ and the worker tests create jobs exactly the way the API does.
 
 | Module | Test | Covers |
 |---|---|---|
-| `job-api` | `JobApiIntegrationTest` | submit → `QUEUED` with its trigger in the shared Quartz store, and the API's scheduler is **never started**; a local `scheduledAt` is interpreted in `jobs.time-zone` and becomes the trigger's start time and `nextAttemptAt`; a past `scheduledAt` → 400 and nothing is stored; 401 on missing or wrong credentials; an existing id is rejected with 409 (same body or not, and for other users too: ids are global); cancelling a **queued** job (CANCELLED, trigger deleted) and then 409 on a second cancel; cancelling a **running** job sets `cancelRequested` for the worker; **rate limiting** (429 + `Retry-After`); validation (400); metrics endpoint restricted to ADMIN |
+| `job-api` | `JobApiIntegrationTest` | submit → `QUEUED` with its trigger in the shared Quartz store, and the API's scheduler is **never started**; a local `scheduledAt` is interpreted in `jobs.time-zone` and becomes the trigger's start time and `nextAttemptAt`; a past `scheduledAt` → 400 and nothing is stored; 401 on missing or wrong credentials; an existing id is rejected with 409 (same body or not, and for other users too: ids are global); cancelling a **queued** job (CANCELLED, trigger deleted) and then 409 on a second cancel; cancelling a **running** job sets `cancelRequested` for the worker; **rate limiting** (429 + `Retry-After`); validation (400); health is public and no metrics endpoint is exposed |
 | `job-api` | `JobCronApiIntegrationTest` | creating a schedule registers a Quartz **cron trigger** (expression, evaluated in `jobs.time-zone`) and reports `nextRunAt`; an existing id is rejected with 409; invalid cron (e.g. Unix 5-field syntax), too-frequent cron and never-firing expressions → 400; cancel removes the trigger, a second cancel → 409; unknown schedule → 404 |
 | `job-api` | `JobSubmissionConcurrencyTest` | **concurrency:** 16 parallel submissions with the same id create exactly one job; the other 15 get the 409 conflict |
 | `job-api` | `SubmissionRateLimiterTest` | per-user minute window: capacity then 429 with a counting-down `Retry-After`, full refill after a minute (not gradual), unused allowance doesn't accumulate, users are independent (unit test, fake clock) |
@@ -180,7 +179,7 @@ Interfaces are prefixed with `I`, and callers depend on the interfaces.
 | `scheduling` | `IJobScheduler` / `QuartzJobScheduler`: `scheduleAttempt`, `unschedule`, `scheduleCron`, `unscheduleCron` and `nextFireTime` against the shared store. |
 | `exceptions` | `JobNotFoundException`, `JobCronNotFoundException`, `IdempotencyConflictException`, `InvalidJobStateException`, `InvalidJobCronException`, `InvalidJobCronStateException`. |
 | `security`, `ratelimit` | HTTP Basic + roles; per-user submissions-per-minute limit. |
-| `config`, `observability` | Properties, clock, MVC config; API metrics. |
+| `config` | Properties, clock, MVC config. |
 
 **`job-worker`** (`com.example.jobs.worker`)
 
@@ -188,7 +187,7 @@ Interfaces are prefixed with `I`, and callers depend on the interfaces.
 |---|---|
 | `execution` | `IJobExecutionService` (extends `IJobRunner`) / `JobExecutionServiceImpl`: the claim / complete / retry / recover state machine, the simulated work, the cancellation poller, and graceful shutdown. `IJobScheduler` / `QuartzJobScheduler`: instance id, retry/requeue triggers, local interrupts. `IJobCronRunService` / `JobCronRunServiceImpl`: turns a cron firing into a job run. |
 | `exceptions` | `SimulatedWorkException`. |
-| `config`, `observability` | Properties, clock; execution metrics. |
+| `config` | Properties, clock. |
 
 ### Job states
 
@@ -334,8 +333,8 @@ jobs **among the ones it is executing** and calls `Thread.interrupt()`. *Trade-o
 Redis pub/sub or a broker topic would make it immediate.
 
 **Authentication and authorization.** On `job-api`: stateless HTTP Basic against configured users, roles USER/ADMIN.
-Any authenticated user can read, list and cancel any job (jobs have no owner). ADMIN is additionally
-required for the metrics endpoints. *Trade-off:* no per-user isolation. Restoring it means an `owner` column,
+Any authenticated user can read, list and cancel any job (jobs have no owner). ADMIN is required for any
+actuator endpoint other than health. *Trade-off:* no per-user isolation. Restoring it means an `owner` column,
 ownership checks in `IJobService`, and job ids scoped per user. *Production:* replace `httpBasic()` with
 `oauth2ResourceServer().jwt()` against an OIDC provider. That's a single-line change in `SecurityConfig`.
 `job-worker` has no API, and its actuator endpoints are unauthenticated: keep its port on the internal network
@@ -352,20 +351,10 @@ keep the windows in Redis (`INCR` + `EXPIRE` per user and minute) behind the sam
 at the API gateway.
 
 **Operational visibility.**
-- Logs carry `jobId` in the MDC on every line written by a worker. State transitions are logged at INFO, retries at WARN, and permanent failures at ERROR. The `application` metric tag (`job-api` / `job-worker`) tells the services apart.
-- Metrics at `/actuator/prometheus` (ADMIN only on `job-api`, internal on `job-worker`):
-
-  | Service | Metric | Meaning |
-  |---|---|---|
-  | api | `jobs_submitted_total` | Submissions |
-  | api | `jobs_submissions_rate_limited_total` | Submissions rejected by the rate limiter |
-  | api | `jobs_count{status}` | Cluster-wide queue depth, read from the DB |
-  | api | `jobs_schedules_created_total`, `jobs_schedules_cancelled_total` | Cron schedules created and cancelled |
-  | worker | `jobs_schedules_runs_created_total`, `jobs_schedules_runs_skipped_total` | Runs created by cron firings, and firings skipped because the previous run was still active |
-  | both | `jobs_finished_total{outcome}` | Completions by outcome (the API counts cancellations of pending jobs) |
-  | worker | `jobs_retries_total`, `jobs_recovered_total` | Retries, and jobs taken over after a worker failure |
-  | worker | `jobs_execution_seconds` | Duration of each attempt |
-  | worker | `jobs_running_local` | Jobs running on this worker |
+- Logs carry `jobId` in the MDC on every line written by a worker. State transitions are logged at INFO, retries at WARN, and permanent failures at ERROR.
+- No metrics are collected: there's no Micrometer registry or `/actuator/prometheus`. Job state is visible through
+  the API (`GET /api/jobs`, `/api/jobs/{id}`) and the logs. Adding Prometheus later means adding
+  `micrometer-registry-prometheus`, exposing the endpoint, and incrementing counters at the state transitions.
 - Health checks: `/actuator/health` (includes DB) and `/actuator/health/liveness|readiness` for Kubernetes probes.
 
 **Spring Boot 3.5 rather than 4.x.** It's the most widely deployed line, and its Testcontainers and Quartz
@@ -387,7 +376,7 @@ integrations are mature. Moving to 4.x is mechanical.
 | Idempotency, retries with backoff, interrupted/failed jobs | Implemented |
 | AuthN/AuthZ | Implemented (Basic + roles; no per-job ownership). OIDC/JWT is designed only. |
 | Rate limiting | Implemented per instance. Cluster-wide (Redis) is designed only. |
-| Logs + metrics | Implemented. Tracing is designed only. |
+| Logs + health checks | Implemented. Metrics and tracing are designed only. |
 
 ### Remaining work and how I'd do it
 

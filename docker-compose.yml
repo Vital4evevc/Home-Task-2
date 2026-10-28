@@ -5,7 +5,7 @@ x-db-env: &db-env
   DB_USER: jobs
   DB_PASSWORD: jobs
 
-# job-worker: executes jobs only. Its HTTP port serves actuator health/metrics, no API.
+# job-worker: executes jobs only. Its HTTP port serves actuator health checks, no API.
 x-worker: &worker
   build:
     context: .
@@ -63,12 +63,12 @@ services:
   worker1:
     <<: *worker
     ports:
-      - "9091:8080"        # actuator only
+      - "9091:8080"        # health checks only
 
   worker2:
     <<: *worker
     ports:
-      - "9092:8080"        # actuator only
+      - "9092:8080"        # health checks only
 
   # Runs the test suites of all modules inside Docker. Testcontainers starts its own MySQL through
   # the host's Docker daemon (socket mount), so nothing but Docker is needed on the machine.

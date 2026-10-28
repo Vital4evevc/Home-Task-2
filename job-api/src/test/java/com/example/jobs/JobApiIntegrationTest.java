@@ -183,13 +183,10 @@ class JobApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void metricsEndpointRequiresAdmin() throws Exception {
-        mvc.perform(get("/actuator/prometheus").with(httpBasic("alice", "alice-pass")))
-                .andExpect(status().isForbidden());
+    void healthIsPublicAndMetricsAreNotExposed() throws Exception {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk());
-        MvcResult r = mvc.perform(get("/actuator/prometheus").with(httpBasic("admin", "admin-pass")))
-                .andExpect(status().isOk()).andReturn();
-        assertThat(r.getResponse().getContentAsString()).contains("jobs_count");
+        mvc.perform(get("/actuator/prometheus").with(httpBasic("admin", "admin-pass")))
+                .andExpect(status().isNotFound());
     }
 
     /** @param id optional client-supplied job id, injected into the JSON body */

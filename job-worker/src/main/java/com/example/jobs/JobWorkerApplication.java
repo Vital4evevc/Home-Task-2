@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Worker service: only executes jobs. It has no REST API (only actuator health/metrics); its clustered
+ * Worker service: only executes jobs. It has no REST API (only actuator health checks); its clustered
  * Quartz scheduler picks up jobs that the API service scheduled in the shared store.
  *
  * <p>Lives in {@code com.example.jobs} so component and entity scanning include the shared

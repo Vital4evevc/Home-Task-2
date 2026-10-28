@@ -68,14 +68,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info
   endpoint:
     health:
       probes:
         enabled: true
-  metrics:
-    tags:
-      application: job-api
 
 logging:
   pattern:
