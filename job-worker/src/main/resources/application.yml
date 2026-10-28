@@ -1,0 +1,79 @@
+# job-worker: executes jobs only. No REST API; the HTTP port serves actuator health/metrics.
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: job-worker
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/jobs?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_USER:jobs}
+    password: ${DB_PASSWORD:jobs}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none             # schema.sql (job-common) owns the schema
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  sql:
+    init:
+      mode: always               # run classpath:schema.sql on startup (idempotent CREATE TABLE IF NOT EXISTS)
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      initialize-schema: never   # Quartz tables are in schema.sql (Quartz's own script DROPs tables)
+    scheduler-name: job-scheduler  # MUST match job-api: it is the SCHED_NAME both services share
+    wait-for-jobs-to-complete-on-shutdown: true
+    overwrite-existing-jobs: false
+    properties:
+      org.quartz.scheduler.instanceId: AUTO
+      # Triggers are written by another process (job-api), which can't wake this scheduler up, so poll
+      # for new triggers every second instead of Quartz's default 30s.
+      org.quartz.scheduler.idleWaitTime: ${QUARTZ_IDLE_WAIT_MS:1000}
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
+      org.quartz.jobStore.tablePrefix: QRTZ_
+      org.quartz.jobStore.isClustered: true
+      org.quartz.jobStore.clusterCheckinInterval: ${QUARTZ_CHECKIN_MS:10000}
+      org.quartz.jobStore.misfireThreshold: 60000
+      org.quartz.jobStore.acquireTriggersWithinLock: true
+      # Per-worker processing limit: max jobs executing concurrently on one worker instance.
+      org.quartz.threadPool.threadCount: ${JOBS_MAX_CONCURRENT_PER_INSTANCE:4}
+      org.quartz.threadPool.threadPriority: 5
+
+jobs:
+  work:
+    min-duration: ${JOBS_MIN_DURATION:PT1M}
+    max-duration: ${JOBS_MAX_DURATION:PT5M}
+    random-failure-rate: ${JOBS_RANDOM_FAILURE_RATE:0.0}
+  retry:
+    initial-backoff: ${JOBS_INITIAL_BACKOFF:PT10S}
+    multiplier: 2.0
+  cancellation:
+    poll-interval: PT2S
+  shutdown:
+    requeue-wait: PT10S
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: job-worker
+
+logging:
+  pattern:
+    level: "%5p [jobId=%X{jobId:-}]"
+  level:
+    com.example.jobs: INFO
+    org.quartz: WARN

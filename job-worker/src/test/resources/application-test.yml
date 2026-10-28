@@ -1,0 +1,20 @@
+# Fast settings so the full lifecycle (incl. retries and cancellation) runs in seconds.
+spring:
+  quartz:
+    properties:
+      org.quartz.threadPool.threadCount: 8
+      org.quartz.jobStore.clusterCheckinInterval: 2000
+      org.quartz.scheduler.idleWaitTime: 1000   # Quartz minimum
+
+jobs:
+  work:
+    min-duration: PT1S
+    max-duration: PT2S
+    random-failure-rate: 0.0
+  retry:
+    initial-backoff: PT0.5S
+    multiplier: 1.0
+  cancellation:
+    poll-interval: PT0.2S
+  shutdown:
+    requeue-wait: PT5S

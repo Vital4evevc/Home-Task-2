@@ -1,0 +1,92 @@
+name: job-platform
+
+x-db-env: &db-env
+  DB_URL: jdbc:mysql://mysql:3306/jobs?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+  DB_USER: jobs
+  DB_PASSWORD: jobs
+
+# job-worker: executes jobs only. Its HTTP port serves actuator health/metrics, no API.
+x-worker: &worker
+  build:
+    context: .
+    args: { MODULE: job-worker }
+  image: job-worker:latest
+  restart: unless-stopped
+  depends_on:
+    mysql:
+      condition: service_healthy
+  environment:
+    <<: *db-env
+    JOBS_MAX_CONCURRENT_PER_INSTANCE: ${JOBS_MAX_CONCURRENT_PER_INSTANCE:-4}
+    JOBS_MIN_DURATION: ${JOBS_MIN_DURATION:-PT1M}
+    JOBS_MAX_DURATION: ${JOBS_MAX_DURATION:-PT5M}
+    JOBS_RANDOM_FAILURE_RATE: ${JOBS_RANDOM_FAILURE_RATE:-0.5}
+  stop_grace_period: 40s   # > spring.lifecycle.timeout-per-shutdown-phase, so running jobs get requeued
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: jobs
+      MYSQL_USER: jobs
+      MYSQL_PASSWORD: jobs
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"        # 3307 on the host to avoid clashing with a local MySQL
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ujobs", "-pjobs"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # job-api: REST API. Schedules jobs into the shared Quartz store, never executes them.
+  # One instance is enough here; it is stateless, so it can be scaled behind a load balancer.
+  api:
+    build:
+      context: .
+      args: { MODULE: job-api }
+    image: job-api:latest
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: *db-env
+      JOBS_MAX_ATTEMPTS: ${JOBS_MAX_ATTEMPTS:-3}
+      JOBS_TIME_ZONE: ${JOBS_TIME_ZONE:-Asia/Jerusalem}   # zone for scheduledAt and cron (override with JOBS_TIME_ZONE)
+    ports:
+      - "8080:8080"
+
+  worker1:
+    <<: *worker
+    ports:
+      - "9091:8080"        # actuator only
+
+  worker2:
+    <<: *worker
+    ports:
+      - "9092:8080"        # actuator only
+
+  # Runs the test suites of all modules inside Docker. Testcontainers starts its own MySQL through
+  # the host's Docker daemon (socket mount), so nothing but Docker is needed on the machine.
+  #   docker compose --profile test run --rm tests
+  tests:
+    profiles: [test]
+    image: maven:3.9-eclipse-temurin-21
+    working_dir: /src
+    command: mvn -B test
+    volumes:
+      - .:/src
+      - maven-cache:/root/.m2
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  mysql-data:
+  maven-cache:

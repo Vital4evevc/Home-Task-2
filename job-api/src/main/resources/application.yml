@@ -1,0 +1,85 @@
+# job-api: REST API. Schedules jobs into the shared Quartz store but never executes them.
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: job-api
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/jobs?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_USER:jobs}
+    password: ${DB_PASSWORD:jobs}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none             # schema.sql (job-common) owns the schema
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  sql:
+    init:
+      mode: always               # run classpath:schema.sql on startup (idempotent CREATE TABLE IF NOT EXISTS)
+  quartz:
+    job-store-type: jdbc
+    # Never start this scheduler: it is only used to write and delete jobs/triggers in the shared
+    # store. It never acquires triggers, so no job ever executes in this service.
+    auto-startup: false
+    jdbc:
+      initialize-schema: never   # Quartz tables are in schema.sql (Quartz's own script DROPs tables)
+    scheduler-name: job-scheduler  # MUST match job-worker: it is the SCHED_NAME both services share
+    overwrite-existing-jobs: false
+    properties:
+      org.quartz.scheduler.instanceId: AUTO
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
+      org.quartz.jobStore.tablePrefix: QRTZ_
+      # Clustered = use DB row locks (QRTZ_LOCKS) when writing triggers, so writes from this service
+      # are serialised with the workers' trigger acquisition.
+      org.quartz.jobStore.isClustered: true
+      org.quartz.threadPool.threadCount: 1   # required by Quartz, unused (scheduler never starts)
+
+jobs:
+  # Zone for local date-times (scheduledAt) and cron expressions. Set it explicitly: the JVM default in a
+  # container is UTC, wherever the clients are.
+  time-zone: ${JOBS_TIME_ZONE:UTC}
+  retry:
+    max-attempts: ${JOBS_MAX_ATTEMPTS:3}
+  crons:
+    min-interval: ${JOBS_CRON_MIN_INTERVAL:PT1M}   # reject cron expressions that fire more often
+  rate-limit:
+    capacity: ${RATE_LIMIT_CAPACITY:10}          # submissions per user per minute (refilled to full every minute)
+  # Demo users. In production this is replaced by an OIDC provider (see README).
+  security:
+    users:
+      - username: alice
+        password: "{noop}alice-pass"
+        roles: [USER]
+      - username: bob
+        password: "{noop}bob-pass"
+        roles: [USER]
+      - username: admin
+        password: "{noop}admin-pass"
+        roles: [USER, ADMIN]
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: job-api
+
+logging:
+  pattern:
+    level: "%5p [jobId=%X{jobId:-}]"
+  level:
+    com.example.jobs: INFO
+    org.quartz: WARN

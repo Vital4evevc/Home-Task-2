@@ -1,0 +1,14 @@
+jobs:
+  time-zone: Asia/Jerusalem
+  retry:
+    max-attempts: 3
+  crons:
+    min-interval: PT1M
+  rate-limit:
+    capacity: 20
+  security:
+    users:
+      - { username: alice, password: "{noop}alice-pass", roles: [USER] }
+      - { username: bob, password: "{noop}bob-pass", roles: [USER] }
+      - { username: carol, password: "{noop}carol-pass", roles: [USER] }
+      - { username: admin, password: "{noop}admin-pass", roles: [USER, ADMIN] }
